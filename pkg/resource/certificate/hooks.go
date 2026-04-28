@@ -76,6 +76,17 @@ func validatePublicValidationOptions(
 func (rm *resourceManager) maybeImportCertificate(ctx context.Context, r *resource) (*resource, bool, error) {
 	certSpec := r.ko.Spec
 	if certSpec.Certificate != nil {
+		// When re-importing a certificate that was previously created (has an
+		// ARN), clear request-only fields that were populated by late
+		// initialization / DescribeCertificate. These are informational for
+		// imported certs and will be re-populated after the new import succeeds.
+		if r.ko.Status.ACKResourceMetadata != nil && r.ko.Status.ACKResourceMetadata.ARN != nil {
+			certSpec.DomainValidationOptions = nil
+			certSpec.KeyAlgorithm = nil
+			certSpec.SubjectAlternativeNames = nil
+			certSpec.Options = nil
+			certSpec.DomainName = nil
+		}
 		if certSpec.DomainName != nil || len(certSpec.DomainValidationOptions) > 0 || certSpec.KeyAlgorithm != nil ||
 			len(certSpec.SubjectAlternativeNames) > 0 || certSpec.Options != nil {
 			return nil, false, ackerr.NewTerminalError(errors.New("cannot set fields used for requesting a certificate when importing a certificate"))

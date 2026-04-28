@@ -334,6 +334,74 @@ class TestCertificate:
         time.sleep(DELETE_WAIT_AFTER_SECONDS)
         certificate.wait_until_deleted(certificate_arn)
 
+    def test_reimport_after_external_delete(
+            self,
+            certificate_import,
+    ):
+        (ref, cr) = certificate_import
+        assert k8s.wait_on_condition(
+            ref,
+            condition.CONDITION_TYPE_RESOURCE_SYNCED,
+            "True",
+            wait_periods=MAX_WAIT_FOR_SYNCED_MINUTES,
+        )
+
+        cr = k8s.get_resource(ref)
+        assert 'status' in cr
+        status = cr['status']
+        assert 'ackResourceMetadata' in status
+        assert 'arn' in status['ackResourceMetadata']
+        original_arn = status['ackResourceMetadata']['arn']
+        assert status['type_'] == 'IMPORTED'
+
+        # Verify late-initialized fields are present in spec (these caused
+        # the bug when re-importing)
+        spec = cr['spec']
+        assert spec.get('keyAlgorithm') is not None or \
+            spec.get('subjectAlternativeNames') is not None, \
+            "Expected late-initialized fields to be present in spec"
+
+        # Delete the certificate directly from AWS to simulate console deletion
+        certificate.delete(original_arn)
+        certificate.wait_until_deleted(original_arn)
+
+        # Wait for the controller to detect the deletion and re-import.
+        # The controller's requeue_on_success_seconds is 60, so we wait for
+        # it to reconcile and re-create the certificate.
+        time.sleep(CREATE_WAIT_AFTER_SECONDS)
+
+        # Wait for re-import to complete and resource to sync
+        assert k8s.wait_on_condition(
+            ref,
+            condition.CONDITION_TYPE_RESOURCE_SYNCED,
+            "True",
+            wait_periods=MAX_WAIT_FOR_SYNCED_MINUTES * 3,
+        )
+
+        # Verify the certificate was re-imported with a new ARN
+        cr = k8s.get_resource(ref)
+        new_arn = cr['status']['ackResourceMetadata']['arn']
+        assert new_arn != original_arn, \
+            "Expected a new ARN after re-import"
+        assert cr['status']['type_'] == 'IMPORTED'
+
+        cr = k8s.get_resource(ref)
+        spec = cr['spec']
+        assert spec.get('keyAlgorithm') is not None or \
+            spec.get('subjectAlternativeNames') is not None, \
+            "Expected late-initialized fields to be present in spec"
+
+        # Verify late-initialized values match the new certificate in AWS
+        aws_cert = certificate.get(new_arn)
+        assert aws_cert is not None
+        assert spec['keyAlgorithm'] == aws_cert['KeyAlgorithm']
+        assert spec['subjectAlternativeNames'] == aws_cert['SubjectAlternativeNames']
+
+        # Cleanup
+        k8s.delete_custom_resource(ref)
+        time.sleep(DELETE_WAIT_AFTER_SECONDS)
+        certificate.wait_until_deleted(new_arn)
+
 
 def k8s_client():
     return k8s._get_k8s_api_client()

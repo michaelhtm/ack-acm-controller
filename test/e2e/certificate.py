@@ -132,3 +132,11 @@ def get_tags(certificate_arn):
         return resp['Tags']
     except c.exceptions.ResourceNotFoundException:
         return None
+
+
+def delete(certificate_arn):
+    """Deletes a Certificate directly via the ACM API (simulates console
+    deletion).
+    """
+    c = boto3.client('acm')
+    c.delete_certificate(CertificateArn=certificate_arn)
